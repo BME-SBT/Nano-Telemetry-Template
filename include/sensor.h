@@ -52,7 +52,7 @@ template <typename T>
 class Sensor
 {
 public:
-    Sensor(uint16_t id, uint64_t frequency) : id(id), freq(frequency), data_len(sizeof(T))
+    Sensor(uint16_t id, uint64_t frequency, MCP2515Class &can) : id(id), freq(frequency), can(can)
     {
         send_micros = 1000000 / freq;
     }
@@ -60,15 +60,18 @@ public:
     void set_value(uint8_t *data)
     {
         disabled = false;
-        memcpy(buffer, data, data_len);
+        memcpy(buffer, data, sizeof(T));
     }
 
     void set_value(T value)
     {
         disabled = false;
-        static uint8_t data[sizeof(T)];
-        to_be_bytes(value, data);
-        memcpy(buffer, data, data_len);
+        to_be_bytes(value, buffer);
+    }
+
+    T get_value()
+    {
+        return from_be_bytes<T>(reinterpret_cast<uint8_t *>(buffer));
     }
 
     void disable()
@@ -83,19 +86,33 @@ public:
         uint64_t now = micros();
         if (now - last_send_micros > send_micros)
         {
-            CAN.beginPacket(id);
-            CAN.write(buffer, data_len);
-            CAN.endPacket();
-            last_send_micros = now;
+            can.beginPacket(id);
+            can.write(buffer, sizeof(T));
+            if (!can.endPacket())
+            {
+                Serial.print(id, HEX);
+                Serial.print(" ");
+                Serial.println("failed");
+            }
+            else
+            {
+
+                last_send_micros = now;
+                Serial.print(id, HEX);
+                Serial.print(" ");
+                Serial.print(sizeof(T));
+                Serial.print(" ");
+                Serial.println("sent");
+            }
         }
     }
 
 private:
     uint16_t id;
     uint64_t freq;
-    uint8_t buffer[8];
-    size_t data_len;
+    uint8_t buffer[sizeof(T)];
     uint64_t send_micros;
     uint64_t last_send_micros;
     bool disabled = false;
+    MCP2515Class &can;
 };
