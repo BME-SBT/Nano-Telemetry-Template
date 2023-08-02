@@ -3,6 +3,10 @@
 #include <SoftwareSerial.h>
 
 #include "sensor.h"
+#include "thermistor.h"
+
+#define THERM_PIN A0
+#define FLOW_PIN PB0
 
 SoftwareSerial motor_serial(3, 4);
 
@@ -12,6 +16,13 @@ Sensor<uint16_t> s_motor_temp(0b00010110010, 10, CAN);
 Sensor<uint16_t> s_motor_controller_temp(0b00011010010, 10, CAN);
 Sensor<int32_t> s_motor_power(0b10000110010, 10, CAN);
 Sensor<int8_t> s_throttle_position(0b00000010101, 10, CAN);
+Sensor<uint16_t> s_coolant_temp(0b00111010100, 1, CAN); // A1: termistor
+Sensor<uint16_t> s_coolant_flow(0b10101010100, 1, CAN); // PB0: flow
+
+volatile int flow_frequency;
+unsigned long currentTime;
+unsigned long cloopTime;
+int l_hour;
 
 void dump_bytes(uint8_t *ptr, size_t size)
 {
@@ -26,8 +37,17 @@ void dump_bytes(uint8_t *ptr, size_t size)
     }
     Serial.println();
 }
+
+// Interrupt function for flow meter
+void flow()
+{
+    flow_frequency++;
+}
+
 void setup()
 {
+    pinMode(FLOW_PIN, INPUT);
+    digitalWrite(FLOW_PIN, HIGH);
     // USB debugging
     Serial.begin(115200);
 
@@ -35,6 +55,12 @@ void setup()
     CAN.setPins(10, 2);
     CAN.setSPIFrequency(250000);
     CAN.setClockFrequency(8000000);
+
+    // Flow sensor init
+    currentTime = millis();
+    cloopTime = currentTime;
+    attachInterrupt(0, flow, RISING);
+    sei();
 
     while (!CAN.begin(500000))
     {
@@ -60,44 +86,32 @@ void read_motor_data()
     motor_serial.readBytes(motor_data_raw, 45);
     // dump_bytes(motor_data_raw, 45);
 
-    if (motor_data_raw[0] == 0x7c && motor_data_raw[1] == 0x8d)
+    if (motor_data_raw[0] == 0x7c && motor_data_raw[1] == 0x8d && motor_data_raw[43] == 0x7d)
     {
-        if (motor_data_raw[43] == 0x7d)
-        {
-            success = true;
-            int controller_temp = motor_data_raw[16] - 20;
-            int motor_temp = motor_data_raw[17] - 20;
-            int rpm = ((motor_data_raw[22] << 8) | motor_data_raw[21]) * 10;
-            float current = ((motor_data_raw[29] << 8) | motor_data_raw[28]) / 10.0;
-            motor_voltage = ((motor_data_raw[31] << 8) | motor_data_raw[30]) / 10.0;
-            float power = current * motor_voltage;
+        success = true;
+        int controller_temp = motor_data_raw[16] - 20;
+        int motor_temp = motor_data_raw[17] - 20;
+        int rpm = ((motor_data_raw[22] << 8) | motor_data_raw[21]) * 10;
+        float current = ((motor_data_raw[29] << 8) | motor_data_raw[28]) / 10.0;
+        motor_voltage = ((motor_data_raw[31] << 8) | motor_data_raw[30]) / 10.0;
+        float power = current * motor_voltage;
 
-            s_motor_rpm.set_value((uint16_t)(rpm));
-            s_motor_current.set_value((uint16_t)(floor(current * 10)));
-            s_motor_temp.set_value((uint16_t)(floor(motor_temp * 10)));
-            s_motor_controller_temp.set_value((uint16_t)(floor(controller_temp * 10)));
-            s_motor_power.set_value((int32_t)(floor(power * 1000)));
+        s_motor_rpm.set_value((uint16_t)(rpm));
+        s_motor_current.set_value((uint16_t)(floor(current * 10)));
+        s_motor_temp.set_value((uint16_t)(floor(motor_temp * 10)));
+        s_motor_controller_temp.set_value((uint16_t)(floor(controller_temp * 10)));
+        s_motor_power.set_value((int32_t)(floor(power * 1000)));
 
-            int controller_tmp = motor_data_raw[16] - 20;
-            int motor_tmp = motor_data_raw[17] - 20;
-            int motor_rpm = ((motor_data_raw[22] << 8) | motor_data_raw[21]) * 10;
-            int motor_current = (float)((motor_data_raw[29] << 8) | motor_data_raw[28]);
-            int motor_voltage = (float)((motor_data_raw[31] << 8) | motor_data_raw[30]);
-            int motor_power = (motor_current / 10.0) * (motor_voltage / 10.0);
+        int controller_tmp = motor_data_raw[16] - 20;
+        int motor_tmp = motor_data_raw[17] - 20;
+        int motor_rpm = ((motor_data_raw[22] << 8) | motor_data_raw[21]) * 10;
+        int motor_current = (float)((motor_data_raw[29] << 8) | motor_data_raw[28]);
+        int motor_voltage = (float)((motor_data_raw[31] << 8) | motor_data_raw[30]);
+        int motor_power = (motor_current / 10.0) * (motor_voltage / 10.0);
 
-            static char json_buffer[256] = {0};
-            snprintf(json_buffer, 256, "{\"success\": true, \"controller_temp\": %d, \"motor_temp\": %d, \"motor_rpm\": %d, \"motor_current\": %d, \"motor_voltage\": %d, \"motor_power\": %d}", controller_tmp, motor_tmp, motor_rpm, motor_current, motor_voltage, motor_power);
-            Serial.println(json_buffer);
-        }
-        else
-        {
-            s_motor_rpm.disable();
-            s_motor_current.disable();
-            s_motor_temp.disable();
-            s_motor_controller_temp.disable();
-            s_motor_power.disable();
-            success = false;
-        }
+        static char json_buffer[256] = {0};
+        snprintf(json_buffer, 256, "{\"success\": true, \"controller_temp\": %d, \"motor_temp\": %d, \"motor_rpm\": %d, \"motor_current\": %d, \"motor_voltage\": %d, \"motor_power\": %d}", controller_tmp, motor_tmp, motor_rpm, motor_current, motor_voltage, motor_power);
+        Serial.println(json_buffer);
     }
     else
     {
@@ -125,6 +139,28 @@ void read_throttle()
         throttle_pos = 0;
         s_throttle_position.disable();
     }
+}
+
+THERMISTOR thermistor(THERM_PIN, 50000, 3950, 50000);
+void read_termistor()
+{
+    uint16_t temp = thermistor.read() * 10;
+    s_coolant_temp.set_value(temp);
+}
+
+void read_flow()
+{
+    currentTime = millis();
+   // Every second, calculate and print litres/hour
+   if(currentTime >= (cloopTime + 1000))
+   {
+      cloopTime = currentTime; // Updates cloopTime
+      // Pulse frequency (Hz) = 11 Q, Q is flow rate in L/min.
+      l_hour = (flow_frequency * 60 / 11.0); // (Pulse frequency x 60 min) / 11 Q = flowrate in L/hour
+      flow_frequency = 0; // Reset Counter
+      Serial.print(l_hour, DEC); // Print litres/hour
+      Serial.println(" L/hour");
+   }
 }
 
 void loop()

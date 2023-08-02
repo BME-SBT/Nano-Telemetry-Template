@@ -2,6 +2,19 @@
 #include <CAN.h>
 #include <stdint.h>
 
+/**
+ * @brief 
+ * 
+ */
+
+
+/**
+ * @brief 
+ * 
+ * @tparam T 
+ * @param datatype 
+ * @param out 
+ */
 template <typename T>
 inline void to_be_bytes(T datatype, u8 *out)
 {
