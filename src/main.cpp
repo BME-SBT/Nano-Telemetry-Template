@@ -19,7 +19,7 @@ Sensor<int8_t> s_throttle_position(0b00000010101, 10, CAN);
 Sensor<uint16_t> s_coolant_temp(0b00111010100, 1, CAN); // A1: termistor
 Sensor<uint16_t> s_coolant_flow(0b10101010100, 1, CAN); // PB0: flow
 
-volatile int flow_frequency;
+volatile int flow_in10ms;
 unsigned long currentTime;
 unsigned long cloopTime;
 int l_hour;
@@ -41,7 +41,7 @@ void dump_bytes(uint8_t *ptr, size_t size)
 // Interrupt function for flow meter
 void flow()
 {
-    flow_frequency++;
+    flow_in10ms++;
 }
 
 void setup()
@@ -59,8 +59,7 @@ void setup()
     // Flow sensor init
     currentTime = millis();
     cloopTime = currentTime;
-    attachInterrupt(0, flow, RISING);
-    sei();
+    attachInterrupt(0, flow, RISING); // Setup Interrupt
 
     while (!CAN.begin(500000))
     {
@@ -150,17 +149,18 @@ void read_termistor()
 
 void read_flow()
 {
-    currentTime = millis();
-   // Every second, calculate and print litres/hour
-   if(currentTime >= (cloopTime + 1000))
-   {
-      cloopTime = currentTime; // Updates cloopTime
-      // Pulse frequency (Hz) = 11 Q, Q is flow rate in L/min.
-      l_hour = (flow_frequency * 60 / 11.0); // (Pulse frequency x 60 min) / 11 Q = flowrate in L/hour
-      flow_frequency = 0; // Reset Counter
-      Serial.print(l_hour, DEC); // Print litres/hour
-      Serial.println(" L/hour");
-   }
+    cloopTime = currentTime;
+    // For 10 ms enable interrupt to count the high signs
+    sei();
+    while(currentTime - cloopTime < 10) {
+        currentTime = millis();
+    }
+    // Turns off interrupt
+    cli();
+
+    // Pulse frequency (Hz) = 11 Q, Q is flow rate in L/min.
+    l_hour = (flow_in10ms * 6000 / 11.0); // (Pulse frequency in half second x 60 min) / 11 Q = flowrate in L/hour
+    flow_in10ms = 0; // Reset Counter
 }
 
 void loop()
@@ -174,6 +174,8 @@ void loop()
     s_motor_controller_temp.send();
     s_motor_power.send();
     s_throttle_position.send();
+    s_coolant_temp.send();
+    s_coolant_flow.send();
 
     Serial.print((int)throttle_pos);
     Serial.println();
