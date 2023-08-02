@@ -38,12 +38,6 @@ void dump_bytes(uint8_t *ptr, size_t size)
     Serial.println();
 }
 
-// Interrupt function for flow meter
-void flow()
-{
-    flow_in10ms++;
-}
-
 void setup()
 {
     pinMode(FLOW_PIN, INPUT);
@@ -59,7 +53,6 @@ void setup()
     // Flow sensor init
     currentTime = millis();
     cloopTime = currentTime;
-    attachInterrupt(0, flow, RISING); // Setup Interrupt
 
     while (!CAN.begin(500000))
     {
@@ -150,13 +143,19 @@ void read_termistor()
 void read_flow()
 {
     cloopTime = currentTime;
+    bool last = digitalRead(FLOW_PIN);
     // For 10 ms enable interrupt to count the high signs
-    sei();
     while(currentTime - cloopTime < 10) {
+        bool val = digitalRead(FLOW_PIN);
+        // If the pin's sign changed from low to high increase the counter
+        if(val != last) {
+            if(last == false) {
+                flow_in10ms++;
+            }
+            last = val;
+        }
         currentTime = millis();
     }
-    // Turns off interrupt
-    cli();
 
     // Pulse frequency (Hz) = 11 Q, Q is flow rate in L/min.
     l_hour = (flow_in10ms * 6000 / 11.0); // (Pulse frequency in half second x 60 min) / 11 Q = flowrate in L/hour
